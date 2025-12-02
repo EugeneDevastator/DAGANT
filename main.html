@@ -10,11 +10,10 @@ body { font-family: sans-serif; display: flex; height: 100vh; }
 #main { flex: 1; overflow: auto; position: relative; }
 #grid { position: relative; min-height: 100%; }
 #svg-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
-.row { display: flex; min-height: 60px; padding: 5px; gap: 5px; margin-bottom: 18px; }
-.task { width: 180px; height: 50px; border: 1px solid #333; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; font-size: 14px; text-align: center; padding: 2px; user-select: none; }
-.task.selected { border: 2px solid #00f; }
-.task.dep-of-selected { border: 2px solid rgba(240, 0, 30, 0.75); }
-.task.depends-on-selected { border: 2px solid rgba(64, 250, 0, 0.75); }
+.row { display: flex; min-height: 60px; padding: 5px 5px 23px 5px; gap: 5px; }
+.task { height: 50px; border: 1px solid #333; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; font-size: 14px; text-align: center; padding: 2px; user-select: none; }
+.task.selected { background: #d0e0ff !important; border: 2px solid #00f; }
+.task.in-dep-chain { border: 2px solid #ff6600; background: #ffe8d0 !important; }
 .task-id { position: absolute; top: 2px; left: 4px; font-size: 10px; color: #666; }
 .task-name { outline: none; cursor: text; max-width: 140px; overflow: hidden; }
 .task-arrows { position: absolute; bottom: 2px; right: 2px; font-size: 10px; }
@@ -22,7 +21,7 @@ body { font-family: sans-serif; display: flex; height: 100vh; }
 #panel { width: 150px; background: #fff; border-left: 1px solid #ccc; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 #panel button { padding: 8px; cursor: pointer; }
 #panel input { padding: 5px; }
-.empty-slot { width: 180px; height: 50px; border: 1px dashed #ccc; }
+.empty-slot { height: 50px; border: 1px dashed #ccc; }
 </style>
 </head>
 <body>
@@ -48,7 +47,12 @@ let draggedId = null;
 function getTaskById(id) { return tasks.find(t => t.id === id); }
 
 function getTaskBgColor(id) {
-    return id % 2 === 0 ? '#fff' : '#e8f0ff';
+    return id % 2 === 0 ? '#fff' : '#f5f5f5';
+}
+
+function getColumnWidth(colIndex) {
+    const baseWidth = 126;
+    return baseWidth + (colIndex * 20);
 }
 
 function getDependencies(id) {
@@ -57,8 +61,21 @@ function getDependencies(id) {
     return t.deps.slice();
 }
 
-function getDependents(id) {
-    return tasks.filter(t => t.deps.includes(id)).map(t => t.id);
+function getAllDependenciesRecursive(id) {
+    const visited = new Set();
+    const result = [];
+    function dfs(tid) {
+        if (visited.has(tid)) return;
+        visited.add(tid);
+        const t = getTaskById(tid);
+        if (!t) return;
+        t.deps.forEach(depId => {
+            result.push(depId);
+            dfs(depId);
+        });
+    }
+    dfs(id);
+    return result;
 }
 
 function calcLayers() {
@@ -95,10 +112,7 @@ function render() {
     });
     rowTasks.forEach(rt => rt.sort((a,b) => a.priority - b.priority));
     
-    const selectedDeps = selectedId ? getDependencies(selectedId) : [];
-    const selectedDependents = selectedId ? getDependents(selectedId) : [];
-    
-    const positions = {};
+    const depChain = selectedId ? getAllDependenciesRecursive(selectedId) : [];
     
     for (let r = 0; r <= maxLayer; r++) {
         const row = document.createElement('div');
@@ -108,14 +122,24 @@ function render() {
         
         rowTasks[r].forEach((t, idx) => {
             const div = document.createElement('div');
+            const colWidth = getColumnWidth(idx);
+            div.style.width = colWidth + 'px';
+            
             let extraClass = '';
-            if (t.id === selectedId) extraClass = ' selected';
-            else if (selectedDeps.includes(t.id)) extraClass = ' dep-of-selected';
-            else if (selectedDependents.includes(t.id)) extraClass = ' depends-on-selected';
+            if (t.id === selectedId) {
+                extraClass = ' selected';
+            } else if (depChain.includes(t.id)) {
+                extraClass = ' in-dep-chain';
+            }
+            
             div.className = 'task' + extraClass;
-            div.style.background = getTaskBgColor(t.id);
+            if (!extraClass) {
+                div.style.background = getTaskBgColor(t.id);
+            }
             div.draggable = true;
             div.dataset.id = t.id;
+            div.dataset.colIndex = idx;
+            div.dataset.layer = r;
             div.innerHTML = `<span class="task-id">#${t.id}</span><span class="task-name" contenteditable="true">${t.name}</span>
                 <div class="task-arrows"><span data-dir="left">◀</span><span data-dir="right">▶</span></div>`;
             
@@ -163,6 +187,8 @@ function render() {
         });
         
         const empty = document.createElement('div');
+        const emptyWidth = getColumnWidth(rowTasks[r].length);
+        empty.style.width = emptyWidth + 'px';
         empty.className = 'empty-slot';
         empty.ondragover = e => e.preventDefault();
         empty.ondrop = e => {
@@ -183,6 +209,7 @@ function render() {
         row.className = 'row';
         row.style.background = pastelColors[0];
         const empty = document.createElement('div');
+        empty.style.width = getColumnWidth(0) + 'px';
         empty.className = 'empty-slot';
         empty.ondragover = e => e.preventDefault();
         empty.ondrop = e => { e.preventDefault(); draggedId = null; };
@@ -200,17 +227,19 @@ function render() {
         document.querySelectorAll('.task').forEach(el => {
             const rect = el.getBoundingClientRect();
             const id = parseInt(el.dataset.id);
+            const layerIndex = parseInt(el.dataset.layer);
             taskRects[id] = {
                 left: rect.left - gridRect.left,
                 top: rect.top - gridRect.top,
                 width: rect.width,
-                height: rect.height
+                height: rect.height,
+                layer: layerIndex
             };
         });
         
         const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
         defs.innerHTML = `<marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#333" fill-opacity="0.4"/>
+            <path d="M0,0 L0,6 L9,3 z" fill="#333" fill-opacity="0.6"/>
         </marker>`;
         svg.appendChild(defs);
         
@@ -222,38 +251,62 @@ function render() {
                 const toRect = taskRects[d];
                 if (!toRect) return;
                 
-                const fromLayer = layers[t.id] || 0;
-                const toLayer = layers[d] || 0;
+                const fromOffset = Math.min(0.9, fromRect.layer * 0.1);
+                const toOffset = Math.min(0.9, toRect.layer * 0.1);
                 
                 let x1, y1, x2, y2;
                 
-                if (fromLayer > toLayer) {
-                    x1 = fromRect.left + fromRect.width * 0.1;
+                if (fromRect.layer > toRect.layer) {
+                    x1 = fromRect.left + fromRect.width * fromOffset;
                     y1 = fromRect.top;
-                    x2 = toRect.left + toRect.width * 0.1;
+                    x2 = toRect.left + toRect.width * toOffset;
                     y2 = toRect.top + toRect.height;
-                } else if (fromLayer < toLayer) {
-                    x1 = fromRect.left + fromRect.width * 0.1;
+                } else if (fromRect.layer < toRect.layer) {
+                    x1 = fromRect.left + fromRect.width * fromOffset;
                     y1 = fromRect.top + fromRect.height;
-                    x2 = toRect.left + toRect.width * 0.1;
+                    x2 = toRect.left + toRect.width * toOffset;
                     y2 = toRect.top;
                 } else {
-                    x1 = fromRect.left + fromRect.width * 0.1;
+                    x1 = fromRect.left + fromRect.width * fromOffset;
                     y1 = fromRect.top + fromRect.height / 2;
-                    x2 = toRect.left + toRect.width * 0.9;
+                    x2 = toRect.left + toRect.width * toOffset;
                     y2 = toRect.top + toRect.height / 2;
                 }
                 
-                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                line.setAttribute('x1', x1);
-                line.setAttribute('y1', y1);
-                line.setAttribute('x2', x2);
-                line.setAttribute('y2', y2);
-                line.setAttribute('stroke', '#333');
-                line.setAttribute('stroke-opacity', '0.4');
-                line.setAttribute('stroke-width', '2');
-                line.setAttribute('marker-end', 'url(#arrow)');
-                svg.appendChild(line);
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const dx = x2 - x1;
+                const dy = y2 - y1;
+                const dist = Math.sqrt(dx * dx + dy * dy);
+                const controlDist = Math.min(dist * 0.5, 80);
+                
+                let pathData;
+                if (fromRect.layer > toRect.layer) {
+                    const cx1 = x1;
+                    const cy1 = y1 - controlDist;
+                    const cx2 = x2;
+                    const cy2 = y2 + controlDist;
+                    pathData = `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+                } else if (fromRect.layer < toRect.layer) {
+                    const cx1 = x1;
+                    const cy1 = y1 + controlDist;
+                    const cx2 = x2;
+                    const cy2 = y2 - controlDist;
+                    pathData = `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+                } else {
+                    const cx1 = x1 + (dx * 0.3);
+                    const cy1 = y1;
+                    const cx2 = x1 + (dx * 0.7);
+                    const cy2 = y2;
+                    pathData = `M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+                }
+                
+                path.setAttribute('d', pathData);
+                path.setAttribute('stroke', '#333');
+                path.setAttribute('stroke-opacity', '0.6');
+                path.setAttribute('stroke-width', '2');
+                path.setAttribute('fill', 'none');
+                path.setAttribute('marker-end', 'url(#arrow)');
+                svg.appendChild(path);
             });
         });
     }, 0);

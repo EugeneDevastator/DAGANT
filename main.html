@@ -18,6 +18,8 @@ body { font-family: sans-serif; display: flex; height: 100vh; }
 .task-name { outline: none; cursor: text; max-width: 140px; overflow: hidden; }
 .task-arrows { position: absolute; bottom: 2px; right: 2px; font-size: 10px; }
 .task-arrows span { cursor: pointer; margin-left: 2px; }
+.unlink-btn { position: absolute; top: -8px; right: -8px; width: 18px; height: 18px; background: #ff4444; color: white; border: 1px solid #cc0000; border-radius: 50%; cursor: pointer; font-size: 12px; line-height: 16px; text-align: center; font-weight: bold; z-index: 10; pointer-events: auto; }
+.unlink-btn:hover { background: #ff0000; }
 #panel { width: 150px; background: #fff; border-left: 1px solid #ccc; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 #panel button { padding: 8px; cursor: pointer; }
 #panel input { padding: 5px; }
@@ -97,6 +99,13 @@ function calcLayers() {
     return layers;
 }
 
+function removeDependency(fromId, depId) {
+    const t = getTaskById(fromId);
+    if (t) {
+        t.deps = t.deps.filter(d => d !== depId);
+        render();
+    }
+}
 function render() {
     const grid = document.getElementById('grid');
     const svg = document.getElementById('svg-layer');
@@ -113,7 +122,8 @@ function render() {
     rowTasks.forEach(rt => rt.sort((a,b) => a.priority - b.priority));
     
     const depChain = selectedId ? getAllDependenciesRecursive(selectedId) : [];
-    
+    const directDeps = selectedId ? getDependencies(selectedId) : [];
+
     for (let r = 0; r <= maxLayer; r++) {
         const row = document.createElement('div');
         row.className = 'row';
@@ -143,6 +153,18 @@ function render() {
             div.innerHTML = `<span class="task-id">#${t.id}</span><span class="task-name" contenteditable="true">${t.name}</span>
                 <div class="task-arrows"><span data-dir="left">◀</span><span data-dir="right">▶</span></div>`;
             
+            if (selectedId && directDeps.includes(t.id)) {
+                const unlinkBtn = document.createElement('div');
+                unlinkBtn.className = 'unlink-btn';
+                unlinkBtn.textContent = '×';
+                unlinkBtn.onclick = e => {
+                    e.stopPropagation();
+                    removeDependency(selectedId, t.id);
+                };
+                div.appendChild(unlinkBtn);
+            }
+            
+
             const nameSpan = div.querySelector('.task-name');
             nameSpan.onblur = e => { t.name = e.target.textContent || 'Task'; };
             nameSpan.onkeydown = e => { e.stopPropagation(); };
@@ -239,7 +261,7 @@ function render() {
         
         const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
         defs.innerHTML = `<marker id="arrow" markerWidth="6" markerHeight="6" refX="5.4" refY="1.8" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,3.6 L5.4,1.8 z" fill="#333" fill-opacity="0.6"/>
+            <path d="M0,0 L0,3.6 L5.4,1.8 z" fill="#333" fill-opacity="0.9"/>
         </marker>`;
         svg.appendChild(defs);
         
@@ -305,8 +327,8 @@ function render() {
                 }
                 
                 path.setAttribute('d', pathData);
-                path.setAttribute('stroke', '#333');
-                path.setAttribute('stroke-opacity', '0.6');
+                path.setAttribute('stroke', '#008');
+                path.setAttribute('stroke-opacity', '0.2');
                 path.setAttribute('stroke-width', '2');
                 path.setAttribute('fill', 'none');
                 path.setAttribute('marker-end', 'url(#arrow)');

@@ -10,15 +10,19 @@ body { font-family: sans-serif; display: flex; height: 100vh; }
 #main { flex: 1; overflow: auto; position: relative; }
 #grid { position: relative; min-height: 100%; }
 #svg-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
-.row { display: flex; min-height: 60px; padding: 5px; gap: 5px; }
-.task { width: 120px; height: 50px; border: 1px solid #333; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; background: #fff; font-size: 12px; text-align: center; padding: 2px; }
+.row { display: flex; min-height: 60px; padding: 5px; gap: 5px; margin-bottom: 18px; }
+.task { width: 180px; height: 50px; border: 1px solid #333; display: flex; align-items: center; justify-content: center; cursor: pointer; position: relative; font-size: 14px; text-align: center; padding: 2px; user-select: none; }
 .task.selected { border: 2px solid #00f; }
+.task.dep-of-selected { border: 2px solid rgba(240, 0, 30, 0.75); }
+.task.depends-on-selected { border: 2px solid rgba(64, 250, 0, 0.75); }
+.task-id { position: absolute; top: 2px; left: 4px; font-size: 10px; color: #666; }
+.task-name { outline: none; cursor: text; max-width: 140px; overflow: hidden; }
 .task-arrows { position: absolute; bottom: 2px; right: 2px; font-size: 10px; }
 .task-arrows span { cursor: pointer; margin-left: 2px; }
 #panel { width: 150px; background: #fff; border-left: 1px solid #ccc; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 #panel button { padding: 8px; cursor: pointer; }
 #panel input { padding: 5px; }
-.empty-slot { width: 120px; height: 50px; border: 1px dashed #ccc; }
+.empty-slot { width: 180px; height: 50px; border: 1px dashed #ccc; }
 </style>
 </head>
 <body>
@@ -43,25 +47,36 @@ let draggedId = null;
 
 function getTaskById(id) { return tasks.find(t => t.id === id); }
 
+function getTaskBgColor(id) {
+    return id % 2 === 0 ? '#fff' : '#e8f0ff';
+}
+
+function getDependencies(id) {
+    const t = getTaskById(id);
+    if (!t) return [];
+    return t.deps.slice();
+}
+
+function getDependents(id) {
+    return tasks.filter(t => t.deps.includes(id)).map(t => t.id);
+}
+
 function calcLayers() {
     const layers = {};
-    const visited = new Set();
+    const memo = {};
     function getLayer(id) {
-        if (layers[id] !== undefined) return layers[id];
+        if (memo[id] !== undefined) return memo[id];
         const t = getTaskById(id);
         if (!t) return 0;
-        if (t.deps.length === 0) { layers[id] = 0; return 0; }
+        if (t.deps.length === 0) { memo[id] = 0; return 0; }
         let maxDep = 0;
         for (const d of t.deps) {
-            if (!visited.has(d)) {
-                visited.add(d);
-                maxDep = Math.max(maxDep, getLayer(d) + 1);
-            }
+            maxDep = Math.max(maxDep, getLayer(d) + 1);
         }
-        layers[id] = maxDep;
+        memo[id] = maxDep;
         return maxDep;
     }
-    tasks.forEach(t => { visited.clear(); getLayer(t.id); });
+    tasks.forEach(t => { layers[t.id] = getLayer(t.id); });
     return layers;
 }
 
@@ -80,6 +95,9 @@ function render() {
     });
     rowTasks.forEach(rt => rt.sort((a,b) => a.priority - b.priority));
     
+    const selectedDeps = selectedId ? getDependencies(selectedId) : [];
+    const selectedDependents = selectedId ? getDependents(selectedId) : [];
+    
     const positions = {};
     
     for (let r = 0; r <= maxLayer; r++) {
@@ -90,14 +108,43 @@ function render() {
         
         rowTasks[r].forEach((t, idx) => {
             const div = document.createElement('div');
-            div.className = 'task' + (t.id === selectedId ? ' selected' : '');
+            let extraClass = '';
+            if (t.id === selectedId) extraClass = ' selected';
+            else if (selectedDeps.includes(t.id)) extraClass = ' dep-of-selected';
+            else if (selectedDependents.includes(t.id)) extraClass = ' depends-on-selected';
+            div.className = 'task' + extraClass;
+            div.style.background = getTaskBgColor(t.id);
             div.draggable = true;
             div.dataset.id = t.id;
-            div.innerHTML = `<span contenteditable="true" style="outline:none;">${t.name}</span>
+            div.innerHTML = `<span class="task-id">#${t.id}</span><span class="task-name" contenteditable="true">${t.name}</span>
                 <div class="task-arrows"><span data-dir="left">◀</span><span data-dir="right">▶</span></div>`;
-            div.querySelector('span[contenteditable]').onblur = e => { t.name = e.target.textContent || 'Task'; };
-            div.onclick = e => { if (e.target.dataset.dir) return; selectedId = t.id; render(); };
-            div.ondragstart = e => { draggedId = t.id; };
+            
+            const nameSpan = div.querySelector('.task-name');
+            nameSpan.onblur = e => { t.name = e.target.textContent || 'Task'; };
+            nameSpan.onkeydown = e => { e.stopPropagation(); };
+            nameSpan.onclick = e => { e.stopPropagation(); };
+            nameSpan.onmousedown = e => { e.stopPropagation(); };
+            
+            div.onclick = e => { 
+                if (e.target.dataset.dir || e.target.classList.contains('task-name')) return; 
+                selectedId = t.id; 
+                render(); 
+            };
+            div.onmousedown = e => {
+                if (e.target.classList.contains('task-name')) {
+                    div.draggable = false;
+                }
+            };
+            div.onmouseup = e => {
+                div.draggable = true;
+            };
+            div.ondragstart = e => { 
+                if (document.activeElement.classList.contains('task-name')) {
+                    e.preventDefault();
+                    return;
+                }
+                draggedId = t.id; 
+            };
             div.ondragover = e => e.preventDefault();
             div.ondrop = e => {
                 e.preventDefault();
@@ -149,39 +196,66 @@ function render() {
         svg.setAttribute('height', grid.scrollHeight);
         svg.innerHTML = '';
         
+        const taskRects = {};
         document.querySelectorAll('.task').forEach(el => {
             const rect = el.getBoundingClientRect();
             const id = parseInt(el.dataset.id);
-            positions[id] = {
-                x: rect.left - gridRect.left + rect.width / 2,
-                y: rect.top - gridRect.top + rect.height / 2
+            taskRects[id] = {
+                left: rect.left - gridRect.left,
+                top: rect.top - gridRect.top,
+                width: rect.width,
+                height: rect.height
             };
-        });
-        
-        tasks.forEach(t => {
-            t.deps.forEach(d => {
-                const from = positions[t.id];
-                const to = positions[d];
-                if (from && to) {
-                    const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-                    line.setAttribute('x1', from.x);
-                    line.setAttribute('y1', from.y);
-                    line.setAttribute('x2', to.x);
-                    line.setAttribute('y2', to.y);
-                    line.setAttribute('stroke', '#333');
-                    line.setAttribute('stroke-opacity', '0.6');
-                    line.setAttribute('stroke-width', '2');
-                    line.setAttribute('marker-end', 'url(#arrow)');
-                    svg.appendChild(line);
-                }
-            });
         });
         
         const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
         defs.innerHTML = `<marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L9,3 z" fill="#333" fill-opacity="0.6"/>
+            <path d="M0,0 L0,6 L9,3 z" fill="#333" fill-opacity="0.4"/>
         </marker>`;
-        svg.insertBefore(defs, svg.firstChild);
+        svg.appendChild(defs);
+        
+        tasks.forEach(t => {
+            const fromRect = taskRects[t.id];
+            if (!fromRect) return;
+            
+            t.deps.forEach(d => {
+                const toRect = taskRects[d];
+                if (!toRect) return;
+                
+                const fromLayer = layers[t.id] || 0;
+                const toLayer = layers[d] || 0;
+                
+                let x1, y1, x2, y2;
+                
+                if (fromLayer > toLayer) {
+                    x1 = fromRect.left + fromRect.width * 0.1;
+                    y1 = fromRect.top;
+                    x2 = toRect.left + toRect.width * 0.1;
+                    y2 = toRect.top + toRect.height;
+                } else if (fromLayer < toLayer) {
+                    x1 = fromRect.left + fromRect.width * 0.1;
+                    y1 = fromRect.top + fromRect.height;
+                    x2 = toRect.left + toRect.width * 0.1;
+                    y2 = toRect.top;
+                } else {
+                    x1 = fromRect.left + fromRect.width * 0.1;
+                    y1 = fromRect.top + fromRect.height / 2;
+                    x2 = toRect.left + toRect.width * 0.9;
+                    y2 = toRect.top + toRect.height / 2;
+                }
+                
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', x1);
+                line.setAttribute('y1', y1);
+                line.setAttribute('x2', x2);
+                line.setAttribute('y2', y2);
+                line.setAttribute('stroke', '#333');
+                line.setAttribute('stroke-opacity', '0.4');
+                line.setAttribute('stroke-width', '2');
+                line.setAttribute('marker-end', 'url(#arrow)');
+                svg.appendChild(line);
+            });
+        });
     }, 0);
 }
 
@@ -244,6 +318,23 @@ document.getElementById('file-load').onchange = e => {
         reader.readAsText(file);
     }
 };
+
+document.addEventListener('keydown', e => {
+    if (document.activeElement.classList.contains('task-name')) return;
+    if (!selectedId) return;
+    const t = getTaskById(selectedId);
+    if (!t) return;
+    
+    if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        t.priority = Math.max(0, t.priority - 1);
+        render();
+    } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        t.priority++;
+        render();
+    }
+});
 
 render();
 </script>
